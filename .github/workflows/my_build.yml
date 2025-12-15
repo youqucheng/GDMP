@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V5 Target Fix
+name: Build GDMP for Windows (Godot 4) - V6 Virtual Drive
 
 on:
   workflow_dispatch:
@@ -8,27 +8,25 @@ jobs:
     runs-on: windows-latest
     
     steps:
-      # 1. 开启系统级长路径支持
+      # 1. 开启系统级长路径支持 (必须保留)
       - name: Enable Long Paths
         run: git config --system core.longpaths true
 
-      # 2. 拉取代码
+      # 2. 拉取代码 (使用最稳健的 fetch-depth: 0)
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          path: repo_temp
+          fetch-depth: 0
 
-      # 3. 搬家到 C 盘 (保持这个好习惯)
-      - name: Move to Short Path
+      # 3. 核心修复：创建虚拟盘符 R: (解决路径问题且不破坏 Git 结构)
+      - name: Create Virtual Drive R:
         shell: cmd
         run: |
-          echo Moving repo to C:\w ...
-          xcopy repo_temp C:\w\ /E /H /Y /Q > nul
-          
-          echo Debug: Check file structure
-          if exist C:\w\gdmp\BUILD (echo [SUCCESS] Found BUILD file in gdmp subdir!) else (echo [ERROR] Still missing BUILD file!)
-          dir C:\w\gdmp
+          subst R: .
+          R:
+          echo Virtual Drive R: created.
+          dir
 
       # 4. 环境准备
       - name: Setup Python
@@ -39,44 +37,57 @@ jobs:
       - name: Install Bazel
         run: choco install bazel
 
+      # 5. 在 R: 盘下安装依赖
       - name: Install Dependencies
-        working-directory: C:\w
-        run: pip install numpy opencv-python
-
-      # 5. 生成/下载必要的 API 文件 (Godot 绑定需要)
-      # 尝试运行 setup.py 来生成配置，如果不成功也没关系，Bazel 可能会自己处理
-      - name: Pre-configure (Optional)
-        working-directory: C:\w
-        continue-on-error: true
-        run: python setup.py
-
-      # 6. 执行编译 (关键修改：目标改为 //gdmp:gdmp)
-      - name: Build with Bazel (Correct Target)
         shell: cmd
-        working-directory: C:\w
         run: |
-          echo Starting Build for //gdmp:gdmp ...
-          bazel --output_user_root=C:\b build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:gdmp
+          R:
+          pip install numpy opencv-python
 
-      # 7. 搜刮战利品
+      # 6. 关键步骤：运行 setup.py 生成 Godot 绑定
+      # 这一步会下载 extension_api.json 并配置 godot-cpp，缺少这步编译必挂
+      - name: Generate Bindings (setup.py)
+        shell: cmd
+        run: |
+          R:
+          echo Running setup.py to generate bindings...
+          python setup.py
+
+      # 7. 再次确认 submodule (防止网络波动导致子模块不全)
+      - name: Force Update Submodules
+        shell: cmd
+        run: |
+          R:
+          git submodule update --init --recursive
+
+      # 8. 执行编译 (在 R: 盘根目录执行)
+      # 目标路径明确为 //gdmp:gdmp
+      - name: Build with Bazel (On Virtual Drive)
+        shell: cmd
+        run: |
+          R:
+          echo Starting Bazel Build on Drive R:...
+          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:gdmp
+
+      # 9. 搜刮战利品
       - name: Find and Copy Artifacts
         shell: cmd
-        working-directory: C:\w
         run: |
-          mkdir output
+          R:
+          mkdir C:\final_output
           
           echo Searching for gdmp.dll...
-          for /r C:\b %%i in (gdmp.dll) do copy "%%i" output\
+          for /r bazel-bin %%i in (gdmp.dll) do copy "%%i" C:\final_output\
           
           echo Searching for gdmp.gdextension...
-          for /r %%i in (gdmp.gdextension) do copy "%%i" output\
+          for /r %%i in (gdmp.gdextension) do copy "%%i" C:\final_output\
           
-          echo Result:
-          dir output\
+          echo Artifacts collected:
+          dir C:\final_output\
 
-      # 8. 上传
+      # 10. 上传
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-build-v5
-          path: C:\w\output\
+          name: gdmp-windows-godot4-build-v6
+          path: C:\final_output\
