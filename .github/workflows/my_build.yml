@@ -1,0 +1,44 @@
+name: Build GDMP for Windows (Godot 4)
+
+on:
+  workflow_dispatch: # 必须有这行，才能让你看到手动运行的按钮
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive # 必须递归下载子模块
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11' 
+
+      - name: Install Bazel
+        run: choco install bazel
+
+      - name: Install Python Dependencies
+        run: pip install numpy opencv-python
+
+      # 这里的参数是专门适配 Windows + Godot 4 的
+      - name: Build with Bazel
+        shell: cmd
+        run: |
+          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //:gdmp
+
+      - name: Prepare Artifacts
+        run: |
+          mkdir output
+          copy bazel-bin\gdmp.dll output\
+          copy gdmp.gdextension output\ 
+        shell: cmd
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gdmp-windows-godot4-build
+          path: output/
