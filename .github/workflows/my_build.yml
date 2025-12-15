@@ -1,44 +1,68 @@
-name: Build GDMP for Windows (Godot 4)
+name: Build GDMP for Windows (Godot 4) - V2 Fix
 
 on:
-  workflow_dispatch: # 必须有这行，才能让你看到手动运行的按钮
+  workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
     
     steps:
+      # 1. 开启 Windows 长路径支持 (关键修复)
+      - name: Enable Long Paths
+        run: git config --system core.longpaths true
+
+      # 2. 拉取代码
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          submodules: recursive # 必须递归下载子模块
+          submodules: recursive
 
+      # 3. 调试：列出文件 (如果再失败，我们可以看清楚目录下到底有啥)
+      - name: List Files (Debug)
+        run: dir
+        shell: cmd
+
+      # 4. 安装 Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11' 
 
+      # 5. 安装 Bazel
       - name: Install Bazel
         run: choco install bazel
 
-      - name: Install Python Dependencies
-        run: pip install numpy opencv-python
+      # 6. 安装 Python 依赖 (GDMP 需要这些)
+      - name: Install Dependencies
+        run: pip install numpy opencv-python setuptools wheel
 
-      # 这里的参数是专门适配 Windows + Godot 4 的
-      - name: Build with Bazel
+      # 7. 执行编译 (改用 setup.py，更智能)
+      - name: Build with Setup.py
         shell: cmd
         run: |
-          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //:gdmp
+          python setup.py build --define=GODOT=4
 
-      - name: Prepare Artifacts
+      # 8. 自动搜索并复制产物 (不管它在哪，都把它挖出来)
+      - name: Locate and Copy Artifacts
+        shell: cmd
         run: |
           mkdir output
-          copy bazel-bin\gdmp.dll output\
-          copy gdmp.gdextension output\ 
-        shell: cmd
+          echo Searching for gdmp.dll...
+          dir /s /b gdmp.dll > dll_path.txt
+          set /p DLL_PATH=<dll_path.txt
+          echo Found DLL at: %DLL_PATH%
+          copy "%DLL_PATH%" output\
+          
+          echo Searching for gdmp.gdextension...
+          dir /s /b gdmp.gdextension > ext_path.txt
+          set /p EXT_PATH=<ext_path.txt
+          echo Found Extension at: %EXT_PATH%
+          copy "%EXT_PATH%" output\
 
+      # 9. 上传结果
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-build
+          name: gdmp-windows-godot4-build-v2
           path: output/
