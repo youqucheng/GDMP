@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V4 Root Fix
+name: Build GDMP for Windows (Godot 4) - V5 Target Fix
 
 on:
   workflow_dispatch:
@@ -8,53 +8,57 @@ jobs:
     runs-on: windows-latest
     
     steps:
-      # 1. 开启系统级长路径支持 (虽然我们要搬家，但这个还得开)
+      # 1. 开启系统级长路径支持
       - name: Enable Long Paths
         run: git config --system core.longpaths true
 
-      # 2. 拉取代码 (包含巨大的子模块)
+      # 2. 拉取代码
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          path: repo_temp  # 先下载到一个临时文件夹
+          path: repo_temp
 
-      # 3. 核武器：搬家到 C 盘根目录 (解决路径过长问题)
+      # 3. 搬家到 C 盘 (保持这个好习惯)
       - name: Move to Short Path
         shell: cmd
         run: |
           echo Moving repo to C:\w ...
           xcopy repo_temp C:\w\ /E /H /Y /Q > nul
-          echo Move complete.
           
-          echo Checking for BUILD file in C:\w ...
-          if exist C:\w\BUILD (echo BUILD file FOUND!) else (echo BUILD file MISSING - Checkout failed?)
-          dir C:\w
+          echo Debug: Check file structure
+          if exist C:\w\gdmp\BUILD (echo [SUCCESS] Found BUILD file in gdmp subdir!) else (echo [ERROR] Still missing BUILD file!)
+          dir C:\w\gdmp
 
-      # 4. 安装 Python
+      # 4. 环境准备
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11' 
 
-      # 5. 安装 Bazel
       - name: Install Bazel
         run: choco install bazel
 
-      # 6. 安装依赖 (进入 C:\w 执行)
       - name: Install Dependencies
         working-directory: C:\w
         run: pip install numpy opencv-python
 
-      # 7. 编译 (关键：指定输出目录到 C:\b 以进一步缩短路径)
-      - name: Build with Bazel (Root Path)
+      # 5. 生成/下载必要的 API 文件 (Godot 绑定需要)
+      # 尝试运行 setup.py 来生成配置，如果不成功也没关系，Bazel 可能会自己处理
+      - name: Pre-configure (Optional)
+        working-directory: C:\w
+        continue-on-error: true
+        run: python setup.py
+
+      # 6. 执行编译 (关键修改：目标改为 //gdmp:gdmp)
+      - name: Build with Bazel (Correct Target)
         shell: cmd
         working-directory: C:\w
         run: |
-          echo Starting Build...
-          bazel --output_user_root=C:\b build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //:gdmp
+          echo Starting Build for //gdmp:gdmp ...
+          bazel --output_user_root=C:\b build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:gdmp
 
-      # 8. 搜刮战利品
+      # 7. 搜刮战利品
       - name: Find and Copy Artifacts
         shell: cmd
         working-directory: C:\w
@@ -62,17 +66,17 @@ jobs:
           mkdir output
           
           echo Searching for gdmp.dll...
-          for /r %%i in (gdmp.dll) do copy "%%i" output\
+          for /r C:\b %%i in (gdmp.dll) do copy "%%i" output\
           
           echo Searching for gdmp.gdextension...
           for /r %%i in (gdmp.gdextension) do copy "%%i" output\
           
-          echo Artifacts collected:
+          echo Result:
           dir output\
 
-      # 9. 上传
+      # 8. 上传
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-build-v4
+          name: gdmp-windows-godot4-build-v5
           path: C:\w\output\
