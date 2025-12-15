@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V3 Final
+name: Build GDMP for Windows (Godot 4) - V4 Root Fix
 
 on:
   workflow_dispatch:
@@ -8,26 +8,28 @@ jobs:
     runs-on: windows-latest
     
     steps:
-      # 1. 最关键的一步：在拉取代码前，全局开启长路径支持
-      - name: Enable Long Paths (Global)
-        run: git config --global core.longpaths true
+      # 1. 开启系统级长路径支持 (虽然我们要搬家，但这个还得开)
+      - name: Enable Long Paths
+        run: git config --system core.longpaths true
 
-      # 2. 拉取代码 (带子模块)
+      # 2. 拉取代码 (包含巨大的子模块)
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          path: repo_temp  # 先下载到一个临时文件夹
 
-      # 3. 验证文件结构 (调试用)
-      - name: Verify Workspace
+      # 3. 核武器：搬家到 C 盘根目录 (解决路径过长问题)
+      - name: Move to Short Path
         shell: cmd
         run: |
-          echo "Current Directory:"
-          cd
-          echo "Listing Root Files:"
-          dir
-          echo "Checking for BUILD file..."
-          if exist BUILD (echo BUILD file FOUND!) else (echo BUILD file MISSING!)
+          echo Moving repo to C:\w ...
+          xcopy repo_temp C:\w\ /E /H /Y /Q > nul
+          echo Move complete.
+          
+          echo Checking for BUILD file in C:\w ...
+          if exist C:\w\BUILD (echo BUILD file FOUND!) else (echo BUILD file MISSING - Checkout failed?)
+          dir C:\w
 
       # 4. 安装 Python
       - name: Setup Python
@@ -35,42 +37,42 @@ jobs:
         with:
           python-version: '3.11' 
 
-      # 5. 安装依赖
+      # 5. 安装 Bazel
+      - name: Install Bazel
+        run: choco install bazel
+
+      # 6. 安装依赖 (进入 C:\w 执行)
       - name: Install Dependencies
-        run: |
-          pip install numpy opencv-python
-          choco install bazel
+        working-directory: C:\w
+        run: pip install numpy opencv-python
 
-      # 6. 运行配置脚本 (不带 build 参数，只用来生成绑定配置)
-      # 如果这一步报错，我们设置 continue-on-error 让它继续，因为 bazel 才是主力
-      - name: Configure Project
-        continue-on-error: true
-        run: python setup.py
-
-      # 7. 执行 Bazel 编译 (这才是真正的编译命令)
-      - name: Build with Bazel
+      # 7. 编译 (关键：指定输出目录到 C:\b 以进一步缩短路径)
+      - name: Build with Bazel (Root Path)
         shell: cmd
+        working-directory: C:\w
         run: |
-          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //:gdmp
+          echo Starting Build...
+          bazel --output_user_root=C:\b build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //:gdmp
 
-      # 8. 自动搜索并打包产物
-      - name: Find and Package Artifacts
+      # 8. 搜刮战利品
+      - name: Find and Copy Artifacts
         shell: cmd
+        working-directory: C:\w
         run: |
           mkdir output
           
-          echo "Searching for gdmp.dll..."
+          echo Searching for gdmp.dll...
           for /r %%i in (gdmp.dll) do copy "%%i" output\
           
-          echo "Searching for gdmp.gdextension..."
+          echo Searching for gdmp.gdextension...
           for /r %%i in (gdmp.gdextension) do copy "%%i" output\
           
-          echo "Artifacts in output folder:"
+          echo Artifacts collected:
           dir output\
 
       # 9. 上传
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-build-v3
-          path: output/
+          name: gdmp-windows-godot4-build-v4
+          path: C:\w\output\
