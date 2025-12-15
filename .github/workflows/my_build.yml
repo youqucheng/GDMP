@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V2 Fix
+name: Build GDMP for Windows (Godot 4) - V3 Final
 
 on:
   workflow_dispatch:
@@ -8,20 +8,26 @@ jobs:
     runs-on: windows-latest
     
     steps:
-      # 1. 开启 Windows 长路径支持 (关键修复)
-      - name: Enable Long Paths
-        run: git config --system core.longpaths true
+      # 1. 最关键的一步：在拉取代码前，全局开启长路径支持
+      - name: Enable Long Paths (Global)
+        run: git config --global core.longpaths true
 
-      # 2. 拉取代码
+      # 2. 拉取代码 (带子模块)
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      # 3. 调试：列出文件 (如果再失败，我们可以看清楚目录下到底有啥)
-      - name: List Files (Debug)
-        run: dir
+      # 3. 验证文件结构 (调试用)
+      - name: Verify Workspace
         shell: cmd
+        run: |
+          echo "Current Directory:"
+          cd
+          echo "Listing Root Files:"
+          dir
+          echo "Checking for BUILD file..."
+          if exist BUILD (echo BUILD file FOUND!) else (echo BUILD file MISSING!)
 
       # 4. 安装 Python
       - name: Setup Python
@@ -29,40 +35,42 @@ jobs:
         with:
           python-version: '3.11' 
 
-      # 5. 安装 Bazel
-      - name: Install Bazel
-        run: choco install bazel
-
-      # 6. 安装 Python 依赖 (GDMP 需要这些)
+      # 5. 安装依赖
       - name: Install Dependencies
-        run: pip install numpy opencv-python setuptools wheel
+        run: |
+          pip install numpy opencv-python
+          choco install bazel
 
-      # 7. 执行编译 (改用 setup.py，更智能)
-      - name: Build with Setup.py
+      # 6. 运行配置脚本 (不带 build 参数，只用来生成绑定配置)
+      # 如果这一步报错，我们设置 continue-on-error 让它继续，因为 bazel 才是主力
+      - name: Configure Project
+        continue-on-error: true
+        run: python setup.py
+
+      # 7. 执行 Bazel 编译 (这才是真正的编译命令)
+      - name: Build with Bazel
         shell: cmd
         run: |
-          python setup.py build --define=GODOT=4
+          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //:gdmp
 
-      # 8. 自动搜索并复制产物 (不管它在哪，都把它挖出来)
-      - name: Locate and Copy Artifacts
+      # 8. 自动搜索并打包产物
+      - name: Find and Package Artifacts
         shell: cmd
         run: |
           mkdir output
-          echo Searching for gdmp.dll...
-          dir /s /b gdmp.dll > dll_path.txt
-          set /p DLL_PATH=<dll_path.txt
-          echo Found DLL at: %DLL_PATH%
-          copy "%DLL_PATH%" output\
           
-          echo Searching for gdmp.gdextension...
-          dir /s /b gdmp.gdextension > ext_path.txt
-          set /p EXT_PATH=<ext_path.txt
-          echo Found Extension at: %EXT_PATH%
-          copy "%EXT_PATH%" output\
+          echo "Searching for gdmp.dll..."
+          for /r %%i in (gdmp.dll) do copy "%%i" output\
+          
+          echo "Searching for gdmp.gdextension..."
+          for /r %%i in (gdmp.gdextension) do copy "%%i" output\
+          
+          echo "Artifacts in output folder:"
+          dir output\
 
-      # 9. 上传结果
+      # 9. 上传
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-build-v2
+          name: gdmp-windows-godot4-build-v3
           path: output/
