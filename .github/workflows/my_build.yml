@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V9 Brute Force
+name: Build GDMP for Windows (Godot 4) - V10 Final
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # 创建 R 盘，解决路径长度问题
+      # 1. 创建虚拟盘 (保持不变，这是 Windows 编译的基础)
       - name: Create Virtual Drive R
         shell: cmd
         run: |
@@ -39,49 +39,55 @@ jobs:
           R:
           pip install numpy opencv-python
 
-      # 1. 先运行 setup.py (让它下载必要的 extension_api.json，虽然它配置写得烂，但下载功能我们要用)
-      - name: Run Setup (Download APIs only)
+      # 2. 运行 setup.py 
+      # 目的：让它生成 extension_api.json 和 OpenCV 的基础配置
+      - name: Run Setup (Basic Config)
         shell: cmd
         run: |
           R:
           python setup.py
 
-      # 2. 【核心赔偿步骤】暴力修复 WORKSPACE
-      # 不管 setup.py 写了什么，我们把正确的路径强制追加进去
-      - name: Brute Force Patch WORKSPACE
-        shell: cmd
+      # 3. 【核心修复】使用 PowerShell 精准追加配置
+      # 我们不再覆盖文件，而是把缺失的 3 个库定义，像搭积木一样补在最后
+      - name: Inject Missing Repositories (PowerShell)
+        shell: powershell
         run: |
-          R:
-          python -c "content = \"\"\"
+          Set-Location R:\
           
-          # 暴力追加依赖定义
-          local_repository(
-              name = 'mediapipe',
-              path = 'mediapipe',
-          )
-          
-          local_repository(
-              name = 'godot-cpp',
-              path = 'godot-cpp',
-          )
-          
-          load('@bazel_tools//tools/build_defs/repo:http.bzl', 'http_archive')
-          http_archive(
-              name = 'hedron_compile_commands',
-              url = 'https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz',
-              strip_prefix = 'bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93',
-          )
-          \"\"\"; open('WORKSPACE', 'a').write(content)"
-          
-          echo [INFO] WORKSPACE patched. Verifying content...
-          type WORKSPACE
+          $ContentToAdd = @"
 
-      # 3. 编译 (目标是 GDMP 大写)
+          # === PATCH START ===
+          local_repository(
+              name = "mediapipe",
+              path = "mediapipe",
+          )
+
+          local_repository(
+              name = "godot-cpp",
+              path = "godot-cpp",
+          )
+
+          load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+          http_archive(
+              name = "hedron_compile_commands",
+              url = "https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz",
+              strip_prefix = "bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93",
+          )
+          # === PATCH END ===
+          "@
+
+          Add-Content -Path "WORKSPACE" -Value $ContentToAdd
+          
+          Write-Host "WORKSPACE patched successfully. Printing last 20 lines:"
+          Get-Content WORKSPACE -Tail 20
+
+      # 4. 编译 (大写 GDMP)
       - name: Build with Bazel
         shell: cmd
         run: |
           R:
-          echo Building Target //gdmp:GDMP ...
+          echo Starting Compilation...
           bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
 
       - name: Find and Copy Artifacts
@@ -95,5 +101,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-v9-success
+          name: gdmp-windows-godot4-v10-success
           path: C:\final_output\
