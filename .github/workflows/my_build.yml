@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V18 Precision Fix
+name: Build GDMP for Windows (Godot 4) - V19 Perfect Fusion
 
 on:
   workflow_dispatch:
@@ -43,73 +43,57 @@ jobs:
           R:
           python setup.py
 
-      # 【核心修复】完善 Mock 系统
-      # 这次我们不仅建立目录，还要放入 BUILD 文件，把它们变成合法的 Bazel Package
-      - name: Construct Mock Repositories
+      # 1. 【完美伪造】构建无懈可击的 Mock 系统
+      - name: Construct Robust Mocks
         shell: powershell
         run: |
           Set-Location R:\
           
-          # --- 1. Mock NPM (修复 @bazel/typescript is not a package) ---
-          Write-Host "Mocking NPM..."
-          New-Item -ItemType Directory -Force "mock_npm/@bazel/typescript"
-          
-          # 根目录文件
-          New-Item -Force "mock_npm/WORKSPACE"
-          New-Item -Force "mock_npm/BUILD"
-          
-          # 关键点：在子目录里也放一个 BUILD 文件，证明它是一个 Package
-          New-Item -Force "mock_npm/@bazel/typescript/BUILD"
-          # 创建空的 index.bzl 骗过加载
-          New-Item -Force "mock_npm/@bazel/typescript/index.bzl"
-
-          # --- 2. Mock Remote Execution (修复 TensorFlow 报错) ---
-          Write-Host "Mocking Remote Execution..."
-          New-Item -ItemType Directory -Force "mock_remote"
-          New-Item -Force "mock_remote/WORKSPACE"
-          New-Item -Force "mock_remote/BUILD"
-          # 创建空的 remote_execution.bzl
-          New-Item -Force "mock_remote/remote_execution.bzl"
-
-          # --- 3. Fix Godot-CPP ---
-          Write-Host "Fixing Godot-CPP..."
+          # --- Godot-CPP Mock ---
+          Write-Host "Mocking Godot-CPP..."
+          if (!(Test-Path "godot-cpp")) { New-Item -ItemType Directory "godot-cpp" }
           New-Item -Force "godot-cpp/WORKSPACE"
           "cc_library(name = 'godot', visibility = ['//visibility:public'])" | Out-File "godot-cpp/BUILD" -Encoding ASCII
 
-      # 【核心修复】重写 WORKSPACE (ASCII 编码，无 BOM)
-      # 加入了 local_config_remote_execution 的定义
-      - name: Rewrite WORKSPACE File
+          # --- NPM Mock (修复 'is not a package' 报错) ---
+          Write-Host "Mocking NPM..."
+          # 建立深层目录结构
+          $NpmPath = "mock_npm/@bazel/typescript"
+          New-Item -ItemType Directory -Force $NpmPath
+          
+          # 根级文件
+          New-Item -Force "mock_npm/WORKSPACE"
+          New-Item -Force "mock_npm/BUILD"
+          
+          # 子包文件 (关键：这让 Bazel 承认 @bazel/typescript 是个包)
+          New-Item -Force "$NpmPath/BUILD"
+          # 空的规则定义文件，防止加载报错
+          New-Item -Force "$NpmPath/index.bzl"
+
+      # 2. 【智能融合】构建 WORKSPACE
+      - name: Generate Smart WORKSPACE
         shell: powershell
         run: |
           Set-Location R:\
           
+          # A. 定义我们自己的头部 (ASCII编码)
+          # 注意：我们在头部就定义了 npm 指向 mock_npm
           $Header = @"
           workspace(name = "gdmp")
 
           load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
           load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
-          # === Local Mocks ===
+          # 本地库定义
           local_repository(name = "godot-cpp", path = "godot-cpp")
           local_repository(name = "mediapipe", path = "mediapipe")
-          
-          # Mocked NPM
           local_repository(name = "npm", path = "mock_npm")
-          
-          # Mocked Remote Config for TensorFlow
-          local_repository(name = "local_config_remote_execution", path = "mock_remote")
 
-          # === External Dependencies ===
+          # 基础工具库 (防止 MediaPipe 加载前报错)
           http_archive(
               name = "bazel_skylib",
               urls = ["https://github.com/bazelbuild/bazel-skylib/releases/download/1.4.1/bazel-skylib-1.4.1.tar.gz"],
               sha256 = "b8a1527901774180afc798aeb28c4634bdccf19c4d98e7bdd1ce79d1fe9aaad7",
-          )
-          
-          http_archive(
-              name = "rules_license",
-              urls = ["https://github.com/bazelbuild/rules_license/releases/download/0.0.4/rules_license-0.0.4.tar.gz"],
-              sha256 = "615bc82650f209432be99190204a71a98099195a62931ed50272c1f93f545123",
           )
 
           http_archive(
@@ -118,36 +102,41 @@ jobs:
               strip_prefix = "bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93",
           )
           
-          http_archive(
-              name = "com_google_absl",
-              urls = ["https://github.com/abseil/abseil-cpp/archive/refs/tags/20230125.3.tar.gz"],
-              strip_prefix = "abseil-cpp-20230125.3",
-          )
-          
-          http_archive(
-              name = "org_tensorflow",
-              urls = ["https://github.com/tensorflow/tensorflow/archive/refs/tags/v2.12.0.tar.gz"],
-              strip_prefix = "tensorflow-2.12.0",
-          )
+          # 注意：我们不手动定义 TensorFlow，让 MediaPipe 自己去加载，保证版本正确
           "@
 
-          # 读取原文件，剔除旧头部
-          $OriginalCleaned = Get-Content "WORKSPACE" | Where-Object { $_ -notmatch '^\s*workspace\(' }
-
-          # 合并
-          $FinalContent = $Header + "`n" + ($OriginalCleaned -join "`n")
+          # B. 读取 MediaPipe 官方配置，并进行“消毒”处理
+          # 1. 过滤掉 workspace() 声明
+          # 2. 这里的关键是：MediaPipe 可能会尝试自己定义 npm。
+          #    但由于我们在头部已经定义了 local_repository(name="npm")，
+          #    Bazel 通常会优先使用先定义的，或者我们可以简单地替换名字来避免冲突。
           
-          # 强制 ASCII 保存
+          Write-Host "Reading and Sanitizing MediaPipe Config..."
+          
+          $MediaPipeRaw = Get-Content "mediapipe\WORKSPACE" -Raw
+          
+          # 简单的字符串替换：把 name = "npm" 改名为 name = "npm_unused"
+          # 这样 MediaPipe 里的 npm_install 规则就不会覆盖我们的 mock npm
+          $MediaPipeSanitized = $MediaPipeRaw -replace 'name = "npm"', 'name = "npm_unused"'
+          
+          # 再次确保去除 workspace 定义
+          $MediaPipeFinal = $MediaPipeSanitized -replace '(?m)^\s*workspace\(.*?\)', ''
+
+          # C. 合并
+          $FinalContent = $Header + "`n`n# === MEDIAPIPE INJECTED ===`n" + $MediaPipeFinal
+          
+          # D. 保存 (ASCII)
           Set-Content -Path "WORKSPACE" -Value $FinalContent -Encoding ASCII
 
-          Write-Host "WORKSPACE Rebuilt successfully (ASCII)."
+          Write-Host "WORKSPACE Generated Successfully."
 
-      # 4. 编译
+      # 3. 编译
       - name: Build with Bazel
         shell: cmd
         run: |
           R:
           echo Starting Compilation...
+          # 使用 keep_going 以防万一有非致命错误
           bazel build -c opt --keep_going --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
 
       - name: Find and Copy Artifacts
@@ -161,5 +150,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-v18-precision
+          name: gdmp-windows-godot4-v19-fusion
           path: C:\final_output\
