@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V11 Fix WORKSPACE
+name: Build GDMP for Windows (Godot 4) - V12 Fusion Fix
 
 on:
   workflow_dispatch:
@@ -17,12 +17,12 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      # 1. 虚拟盘策略 (保持，因为真的很有效)
       - name: Create Virtual Drive R
         shell: cmd
         run: |
           subst R: .
           R:
-          echo Virtual Drive R created
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -38,66 +38,62 @@ jobs:
           R:
           pip install numpy opencv-python
 
-      # 运行 setup.py 生成 Godot 绑定代码 (这一步还是需要的)
+      # 2. 运行 setup.py 生成 API json 和基础绑定
       - name: Run Setup (Bindings)
         shell: cmd
         run: |
           R:
           python setup.py
 
-      # 【核心修复】手动补发“身份证”
-      # 既然原脚本没生成，我们就自己创建一个空的 WORKSPACE 文件
-      # 这样 Bazel 就会认为它们是合法的代码库了
-      - name: Create Missing WORKSPACE Files
+      # 3. 手动补发子模块“身份证” (防止 Bazel 找不到路)
+      - name: Create Dummy WORKSPACEs
         shell: cmd
         run: |
           R:
-          echo Creating dummy WORKSPACE for godot-cpp...
           type NUL > godot-cpp\WORKSPACE
-          
-          echo Creating dummy WORKSPACE for mediapipe...
           type NUL > mediapipe\WORKSPACE
-          
-          echo Verification:
-          if exist godot-cpp\WORKSPACE (echo [OK] godot-cpp\WORKSPACE exists) else (echo [FAIL])
 
-      # 注入主配置文件
-      - name: Inject Repository Definitions
+      # 4. 【核弹级操作】融合 MediaPipe 官方配置
+      # 逻辑：读取 mediapipe/WORKSPACE 的所有内容，排除掉 'workspace(' 开头的行（避免命名冲突）
+      # 然后追加到我们的主 WORKSPACE 文件中。
+      # 这样，Google 定义的 100+ 个依赖瞬间全部生效。
+      - name: Fuse MediaPipe Configuration
         shell: powershell
         run: |
           Set-Location R:\
           
-          $ContentToAdd = @"
-
-          # === PATCH START ===
-          local_repository(
-              name = "mediapipe",
-              path = "mediapipe",
-          )
-
-          local_repository(
-              name = "godot-cpp",
-              path = "godot-cpp",
-          )
-
+          # 1. 定义我们要保留的基础配置
+          $BaseConfig = @"
+          workspace(name = "gdmp")
           load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+          load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
-          http_archive(
-              name = "hedron_compile_commands",
-              url = "https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz",
-              strip_prefix = "bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93",
-          )
-          # === PATCH END ===
+          local_repository(name = "godot-cpp", path = "godot-cpp")
+          local_repository(name = "mediapipe", path = "mediapipe")
           "@
+          
+          # 2. 写入基础配置（覆盖旧文件）
+          Set-Content -Path "WORKSPACE" -Value $BaseConfig
+          
+          # 3. 读取 MediaPipe 的官方配置，过滤掉 'workspace(' 声明
+          Write-Host "Reading MediaPipe official configuration..."
+          $MediaPipeConfig = Get-Content "mediapipe\WORKSPACE" | Where-Object { $_ -notmatch '^workspace\(' }
+          
+          # 4. 暴力追加到主文件
+          Write-Host "Injecting MediaPipe config..."
+          Add-Content -Path "WORKSPACE" -Value "`n# === MEDIAPIPE FUSION START ==="
+          Add-Content -Path "WORKSPACE" -Value $MediaPipeConfig
+          Add-Content -Path "WORKSPACE" -Value "# === MEDIAPIPE FUSION END ==="
+          
+          Write-Host "Fusion Complete. WORKSPACE size:"
+          (Get-Item WORKSPACE).Length
 
-          Add-Content -Path "WORKSPACE" -Value $ContentToAdd
-
-      # 编译
+      # 5. 编译 (GDMP 大写)
       - name: Build with Bazel
         shell: cmd
         run: |
           R:
-          echo Starting Compilation...
+          echo Starting Compilation with Fused Config...
           bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
 
       - name: Find and Copy Artifacts
@@ -111,5 +107,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-v11-success
+          name: gdmp-windows-godot4-v12-fusion
           path: C:\final_output\
