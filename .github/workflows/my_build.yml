@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V8 Case Fix
+name: Build GDMP for Windows (Godot 4) - V9 Brute Force
 
 on:
   workflow_dispatch:
@@ -17,6 +17,7 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      # 创建 R 盘，解决路径长度问题
       - name: Create Virtual Drive R
         shell: cmd
         run: |
@@ -38,20 +39,44 @@ jobs:
           R:
           pip install numpy opencv-python
 
-      - name: Generate Bindings
+      # 1. 先运行 setup.py (让它下载必要的 extension_api.json，虽然它配置写得烂，但下载功能我们要用)
+      - name: Run Setup (Download APIs only)
         shell: cmd
         run: |
           R:
           python setup.py
 
-      # 补丁修复依赖定义 (必须保留)
-      - name: Patch WORKSPACE File
+      # 2. 【核心赔偿步骤】暴力修复 WORKSPACE
+      # 不管 setup.py 写了什么，我们把正确的路径强制追加进去
+      - name: Brute Force Patch WORKSPACE
         shell: cmd
         run: |
           R:
-          python -c "with open('WORKSPACE', 'a') as f: f.write('\nload(\"@bazel_tools//tools/build_defs/repo:http.bzl\", \"http_archive\")\nhttp_archive(\n    name = \"hedron_compile_commands\",\n    url = \"https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz\",\n    strip_prefix = \"bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93\",\n)\n')"
+          python -c "content = \"\"\"
+          
+          # 暴力追加依赖定义
+          local_repository(
+              name = 'mediapipe',
+              path = 'mediapipe',
+          )
+          
+          local_repository(
+              name = 'godot-cpp',
+              path = 'godot-cpp',
+          )
+          
+          load('@bazel_tools//tools/build_defs/repo:http.bzl', 'http_archive')
+          http_archive(
+              name = 'hedron_compile_commands',
+              url = 'https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz',
+              strip_prefix = 'bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93',
+          )
+          \"\"\"; open('WORKSPACE', 'a').write(content)"
+          
+          echo [INFO] WORKSPACE patched. Verifying content...
+          type WORKSPACE
 
-      # 关键修改：将 //gdmp:gdmp 改为 //gdmp:GDMP (大写)
+      # 3. 编译 (目标是 GDMP 大写)
       - name: Build with Bazel
         shell: cmd
         run: |
@@ -70,5 +95,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-success
+          name: gdmp-windows-godot4-v9-success
           path: C:\final_output\
