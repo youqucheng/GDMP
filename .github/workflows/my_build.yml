@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V19 Perfect Fusion
+name: Build GDMP (Official Doc Approach) - V20
 
 on:
   workflow_dispatch:
@@ -8,147 +8,77 @@ jobs:
     runs-on: windows-latest
     
     steps:
+      # 1. 基础环境：开启长路径 (MediaPipe 必须项，文档虽没写但这是 Windows 常识)
       - name: Enable Long Paths
         run: git config --system core.longpaths true
 
+      # 2. 拉取代码：必须递归 (recursive)
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
+      # 3. 虚拟盘：这是为了解决 Bazel 在 Windows 下路径过长的唯一方案
+      # 即使官方文档没写，在 CI 环境也是必须的
       - name: Create Virtual Drive R
         shell: cmd
         run: |
           subst R: .
           R:
 
+      # 4. Python 环境：文档要求 Python 3
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11' 
 
+      # 5. 安装 Bazel：文档要求
       - name: Install Bazel
         run: choco install bazel
 
-      - name: Install Dependencies
+      # 6. 安装 Python 依赖：文档要求 numpy 和 opencv
+      - name: Install Python Requirements
         shell: cmd
         run: |
           R:
           pip install numpy opencv-python
 
-      - name: Run Setup
+      # 7. 【关键步骤】运行 setup.py
+      # 官方文档的核心：这一步会自动下载 godot-cpp 并生成必要的 json 绑定文件
+      # 我们不带任何参数运行，让它使用默认配置
+      - name: Run Setup (Generate Bindings)
         shell: cmd
         run: |
           R:
           python setup.py
 
-      # 1. 【完美伪造】构建无懈可击的 Mock 系统
-      - name: Construct Robust Mocks
-        shell: powershell
-        run: |
-          Set-Location R:\
-          
-          # --- Godot-CPP Mock ---
-          Write-Host "Mocking Godot-CPP..."
-          if (!(Test-Path "godot-cpp")) { New-Item -ItemType Directory "godot-cpp" }
-          New-Item -Force "godot-cpp/WORKSPACE"
-          "cc_library(name = 'godot', visibility = ['//visibility:public'])" | Out-File "godot-cpp/BUILD" -Encoding ASCII
-
-          # --- NPM Mock (修复 'is not a package' 报错) ---
-          Write-Host "Mocking NPM..."
-          # 建立深层目录结构
-          $NpmPath = "mock_npm/@bazel/typescript"
-          New-Item -ItemType Directory -Force $NpmPath
-          
-          # 根级文件
-          New-Item -Force "mock_npm/WORKSPACE"
-          New-Item -Force "mock_npm/BUILD"
-          
-          # 子包文件 (关键：这让 Bazel 承认 @bazel/typescript 是个包)
-          New-Item -Force "$NpmPath/BUILD"
-          # 空的规则定义文件，防止加载报错
-          New-Item -Force "$NpmPath/index.bzl"
-
-      # 2. 【智能融合】构建 WORKSPACE
-      - name: Generate Smart WORKSPACE
-        shell: powershell
-        run: |
-          Set-Location R:\
-          
-          # A. 定义我们自己的头部 (ASCII编码)
-          # 注意：我们在头部就定义了 npm 指向 mock_npm
-          $Header = @"
-          workspace(name = "gdmp")
-
-          load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
-          load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
-
-          # 本地库定义
-          local_repository(name = "godot-cpp", path = "godot-cpp")
-          local_repository(name = "mediapipe", path = "mediapipe")
-          local_repository(name = "npm", path = "mock_npm")
-
-          # 基础工具库 (防止 MediaPipe 加载前报错)
-          http_archive(
-              name = "bazel_skylib",
-              urls = ["https://github.com/bazelbuild/bazel-skylib/releases/download/1.4.1/bazel-skylib-1.4.1.tar.gz"],
-              sha256 = "b8a1527901774180afc798aeb28c4634bdccf19c4d98e7bdd1ce79d1fe9aaad7",
-          )
-
-          http_archive(
-              name = "hedron_compile_commands",
-              url = "https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz",
-              strip_prefix = "bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93",
-          )
-          
-          # 注意：我们不手动定义 TensorFlow，让 MediaPipe 自己去加载，保证版本正确
-          "@
-
-          # B. 读取 MediaPipe 官方配置，并进行“消毒”处理
-          # 1. 过滤掉 workspace() 声明
-          # 2. 这里的关键是：MediaPipe 可能会尝试自己定义 npm。
-          #    但由于我们在头部已经定义了 local_repository(name="npm")，
-          #    Bazel 通常会优先使用先定义的，或者我们可以简单地替换名字来避免冲突。
-          
-          Write-Host "Reading and Sanitizing MediaPipe Config..."
-          
-          $MediaPipeRaw = Get-Content "mediapipe\WORKSPACE" -Raw
-          
-          # 简单的字符串替换：把 name = "npm" 改名为 name = "npm_unused"
-          # 这样 MediaPipe 里的 npm_install 规则就不会覆盖我们的 mock npm
-          $MediaPipeSanitized = $MediaPipeRaw -replace 'name = "npm"', 'name = "npm_unused"'
-          
-          # 再次确保去除 workspace 定义
-          $MediaPipeFinal = $MediaPipeSanitized -replace '(?m)^\s*workspace\(.*?\)', ''
-
-          # C. 合并
-          $FinalContent = $Header + "`n`n# === MEDIAPIPE INJECTED ===`n" + $MediaPipeFinal
-          
-          # D. 保存 (ASCII)
-          Set-Content -Path "WORKSPACE" -Value $FinalContent -Encoding ASCII
-
-          Write-Host "WORKSPACE Generated Successfully."
-
-      # 3. 编译
+      # 8. 编译
+      # 根据之前的报错明确了目标是 //gdmp:GDMP
+      # --copt=/D_WIN32_WINNT=0x0601 是为了兼容 Windows 7+ (常见 Bazel 配置)
       - name: Build with Bazel
         shell: cmd
         run: |
           R:
-          echo Starting Compilation...
-          # 使用 keep_going 以防万一有非致命错误
-          bazel build -c opt --keep_going --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
+          echo Starting Official Build Process...
+          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
 
+      # 9. 收集产物
       - name: Find and Copy Artifacts
         shell: cmd
         run: |
           R:
           mkdir C:\final_output
+          
+          echo Collecting DLL...
           for /r bazel-bin %%i in (gdmp.dll) do copy "%%i" C:\final_output\
+          
+          echo Collecting GDExtension file...
           for /r %%i in (gdmp.gdextension) do copy "%%i" C:\final_output\
 
+      # 10. 上传
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-v19-fusion
+          name: gdmp-official-build
           path: C:\final_output\
