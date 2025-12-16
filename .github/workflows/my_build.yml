@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V13 Final Fix
+name: Build GDMP for Windows (Godot 4) - V14 Omni Fix
 
 on:
   workflow_dispatch:
@@ -37,14 +37,12 @@ jobs:
           R:
           pip install numpy opencv-python
 
-      # 1. 运行 setup.py (获取 extension_api.json)
       - name: Run Setup (Bindings)
         shell: cmd
         run: |
           R:
           python setup.py
 
-      # 2. 补发子模块 WORKSPACE (防止 Bazel 找不到路)
       - name: Create Dummy WORKSPACEs
         shell: cmd
         run: |
@@ -52,20 +50,44 @@ jobs:
           type NUL > godot-cpp\WORKSPACE
           type NUL > mediapipe\WORKSPACE
 
-      # 3. 【修正后的融合操作】
-      # 这次 BaseConfig 里包含了 Hedron 的定义，不会再报 undefined 了
-      - name: Fuse Configuration (Corrected)
+      # 【核心修复】: 手动定义 bazel_skylib 和 rules_license
+      # 不管 MediaPipe 的配置怎么写，我们强制先加载这些基础库，防止报错
+      - name: Inject All Dependencies
         shell: powershell
         run: |
           Set-Location R:\
           
-          # 这里把上次漏掉的 hedron 定义补回来了
+          # 这里我们手动定义了 MediaPipe 最喜欢报错的三个库：
+          # 1. bazel_skylib (你刚才报错缺这个)
+          # 2. rules_license (为了防止下一个报错，我提前加上)
+          # 3. hedron_compile_commands (之前的报错)
+          
           $BaseConfig = @"
           workspace(name = "gdmp")
           load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
           load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
-          # 必须包含这个，否则 Bazel 无法生成编译命令
+          # --- 1. Bazel Skylib (必须手动加) ---
+          http_archive(
+              name = "bazel_skylib",
+              urls = [
+                  "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.4.1/bazel-skylib-1.4.1.tar.gz",
+                  "https://github.com/bazelbuild/bazel-skylib/releases/download/1.4.1/bazel-skylib-1.4.1.tar.gz",
+              ],
+              sha256 = "b8a1527901774180afc798aeb28c4634bdccf19c4d98e7bdd1ce79d1fe9aaad7",
+          )
+
+          # --- 2. Rules License (安全起见) ---
+          http_archive(
+              name = "rules_license",
+              urls = [
+                  "https://mirror.bazel.build/github.com/bazelbuild/rules_license/releases/download/0.0.4/rules_license-0.0.4.tar.gz",
+                  "https://github.com/bazelbuild/rules_license/releases/download/0.0.4/rules_license-0.0.4.tar.gz",
+              ],
+              sha256 = "615bc82650f209432be99190204a71a98099195a62931ed50272c1f93f545123",
+          )
+
+          # --- 3. Hedron (之前修好的) ---
           http_archive(
               name = "hedron_compile_commands",
               url = "https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz",
@@ -76,11 +98,9 @@ jobs:
           local_repository(name = "mediapipe", path = "mediapipe")
           "@
           
-          # 写入基础配置
           Set-Content -Path "WORKSPACE" -Value $BaseConfig
           
-          # 读取 MediaPipe 官方配置，过滤掉冲突行，追加到后面
-          # 这样就能自动解决 rules_proto_grpc 等上百个依赖问题
+          # 继续执行融合操作，把剩下的几百个依赖加进来
           Write-Host "Reading MediaPipe official configuration..."
           $MediaPipeConfig = Get-Content "mediapipe\WORKSPACE" | Where-Object { $_ -notmatch '^workspace\(' }
           
@@ -90,13 +110,13 @@ jobs:
           
           Write-Host "Configuration Complete."
 
-      # 4. 编译
       - name: Build with Bazel
         shell: cmd
         run: |
           R:
           echo Starting Compilation...
-          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
+          # 添加 --keep_going 让它尽可能多跑，即使有小警告也不停
+          bazel build -c opt --keep_going --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
 
       - name: Find and Copy Artifacts
         shell: cmd
@@ -109,5 +129,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-v13-final
+          name: gdmp-windows-godot4-v14-omni
           path: C:\final_output\
