@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V16 Clean Slate
+name: Build GDMP for Windows (Godot 4) - V17 Encoding Fix
 
 on:
   workflow_dispatch:
@@ -37,52 +37,45 @@ jobs:
           R:
           pip install numpy opencv-python
 
-      # 1. 运行 setup.py (获取 extension_api.json)
       - name: Run Setup
         shell: cmd
         run: |
           R:
           python setup.py
 
-      # 2. 修复 Godot-CPP 和 NPM
       - name: Fix Submodules and Mock NPM
         shell: powershell
         run: |
           Set-Location R:\
           
           # Fix Godot-CPP
-          echo "Fixing Godot-CPP..."
+          Write-Host "Fixing Godot-CPP..."
           New-Item -Force "godot-cpp\WORKSPACE"
-          echo 'cc_library(name = "godot", visibility = ["//visibility:public"])' | Out-File "godot-cpp\BUILD" -Encoding ASCII
+          "cc_library(name = 'godot', visibility = ['//visibility:public'])" | Out-File "godot-cpp\BUILD" -Encoding ASCII
 
           # Mock NPM
-          echo "Mocking NPM..."
+          Write-Host "Mocking NPM..."
           New-Item -ItemType Directory -Force "mock_npm/@bazel/typescript"
           New-Item -Force "mock_npm/WORKSPACE"
           New-Item -Force "mock_npm/BUILD"
           New-Item -Force "mock_npm/@bazel/typescript/index.bzl"
 
-      # 3. 【核心修复】重写 WORKSPACE 文件
-      # 逻辑：先定义全新的头部，然后把原文件里除了 workspace() 以外的内容接在后面
-      # 这样既保证 workspace() 在第一行，又保留了 setup.py 生成的其他配置
-      - name: Rewrite WORKSPACE File
+      # 【核心修复】使用 ASCII 编码重写文件，彻底去除 BOM 头
+      - name: Rewrite WORKSPACE File (No BOM)
         shell: powershell
         run: |
           Set-Location R:\
           
-          # 1. 定义我们需要的完美头部
           $Header = @"
           workspace(name = "gdmp")
 
           load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
           load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
-          # === Local Repositories ===
           local_repository(name = "godot-cpp", path = "godot-cpp")
           local_repository(name = "mediapipe", path = "mediapipe")
           local_repository(name = "npm", path = "mock_npm")
 
-          # === External Dependencies (Hardcoded Fixes) ===
           http_archive(
               name = "bazel_skylib",
               urls = ["https://github.com/bazelbuild/bazel-skylib/releases/download/1.4.1/bazel-skylib-1.4.1.tar.gz"],
@@ -101,40 +94,35 @@ jobs:
               strip_prefix = "bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93",
           )
           
-          # Abseil (Google C++ Lib)
           http_archive(
               name = "com_google_absl",
               urls = ["https://github.com/abseil/abseil-cpp/archive/refs/tags/20230125.3.tar.gz"],
               strip_prefix = "abseil-cpp-20230125.3",
           )
           
-          # TensorFlow (Mocked/Lightweight definition to satisfy loading)
           http_archive(
               name = "org_tensorflow",
               urls = ["https://github.com/tensorflow/tensorflow/archive/refs/tags/v2.12.0.tar.gz"],
               strip_prefix = "tensorflow-2.12.0",
           )
-
-          # === End of Header ===
           "@
 
-          # 2. 读取原文件，剔除旧的 workspace 定义
-          # 这一步解决了 V15 的报错
+          # 读取原文件，剔除旧的 workspace 定义
           $OriginalCleaned = Get-Content "WORKSPACE" | Where-Object { $_ -notmatch '^\s*workspace\(' }
 
-          # 3. 合并并写入
+          # 合并
           $FinalContent = $Header + "`n" + ($OriginalCleaned -join "`n")
-          Set-Content -Path "WORKSPACE" -Value $FinalContent -Encoding UTF8
+          
+          # 【关键】使用 ASCII 编码保存，防止 BOM 乱码
+          Set-Content -Path "WORKSPACE" -Value $FinalContent -Encoding ASCII
 
-          Write-Host "WORKSPACE Rebuilt successfully."
+          Write-Host "WORKSPACE Rebuilt successfully (ASCII)."
 
-      # 4. 编译 (大写 GDMP)
       - name: Build with Bazel
         shell: cmd
         run: |
           R:
           echo Starting Compilation...
-          # --keep_going 继续尝试编译
           bazel build -c opt --keep_going --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
 
       - name: Find and Copy Artifacts
@@ -148,5 +136,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-v16-success
+          name: gdmp-windows-godot4-v17-success
           path: C:\final_output\
