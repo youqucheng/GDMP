@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V7 Patch Fix
+name: Build GDMP for Windows (Godot 4) - V8 Case Fix
 
 on:
   workflow_dispatch:
@@ -38,30 +38,26 @@ jobs:
           R:
           pip install numpy opencv-python
 
-      # 运行 setup.py 生成基础配置
       - name: Generate Bindings
         shell: cmd
         run: |
           R:
           python setup.py
 
-      # 关键步骤：手术修复 WORKSPACE 文件
-      # 我们用一段 Python 脚本，把缺失的 hedron_compile_commands 定义强制追加到文件末尾
+      # 补丁修复依赖定义 (必须保留)
       - name: Patch WORKSPACE File
         shell: cmd
         run: |
           R:
           python -c "with open('WORKSPACE', 'a') as f: f.write('\nload(\"@bazel_tools//tools/build_defs/repo:http.bzl\", \"http_archive\")\nhttp_archive(\n    name = \"hedron_compile_commands\",\n    url = \"https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz\",\n    strip_prefix = \"bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93\",\n)\n')"
-          
-          echo [INFO] Patch applied. Printing last 10 lines of WORKSPACE to verify:
-          powershell Get-Content WORKSPACE -Tail 10
 
-      # 开始编译
+      # 关键修改：将 //gdmp:gdmp 改为 //gdmp:GDMP (大写)
       - name: Build with Bazel
         shell: cmd
         run: |
           R:
-          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:gdmp
+          echo Building Target //gdmp:GDMP ...
+          bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
 
       - name: Find and Copy Artifacts
         shell: cmd
@@ -74,5 +70,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-patched
+          name: gdmp-windows-godot4-success
           path: C:\final_output\
