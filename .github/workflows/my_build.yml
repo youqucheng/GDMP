@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V6 Virtual Drive
+name: Build GDMP for Windows (Godot 4) - V6 Fixed
 
 on:
   workflow_dispatch:
@@ -8,27 +8,22 @@ jobs:
     runs-on: windows-latest
     
     steps:
-      # 1. 开启系统级长路径支持 (必须保留)
       - name: Enable Long Paths
         run: git config --system core.longpaths true
 
-      # 2. 拉取代码 (使用最稳健的 fetch-depth: 0)
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # 3. 核心修复：创建虚拟盘符 R: (解决路径问题且不破坏 Git 结构)
-      - name: Create Virtual Drive R:
+      - name: Create Virtual Drive R
         shell: cmd
         run: |
           subst R: .
           R:
-          echo Virtual Drive R: created.
-          dir
+          echo Virtual Drive R created
 
-      # 4. 环境准备
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -37,57 +32,34 @@ jobs:
       - name: Install Bazel
         run: choco install bazel
 
-      # 5. 在 R: 盘下安装依赖
       - name: Install Dependencies
         shell: cmd
         run: |
           R:
           pip install numpy opencv-python
 
-      # 6. 关键步骤：运行 setup.py 生成 Godot 绑定
-      # 这一步会下载 extension_api.json 并配置 godot-cpp，缺少这步编译必挂
-      - name: Generate Bindings (setup.py)
+      - name: Generate Bindings
         shell: cmd
         run: |
           R:
-          echo Running setup.py to generate bindings...
           python setup.py
 
-      # 7. 再次确认 submodule (防止网络波动导致子模块不全)
-      - name: Force Update Submodules
+      - name: Build with Bazel
         shell: cmd
         run: |
           R:
-          git submodule update --init --recursive
-
-      # 8. 执行编译 (在 R: 盘根目录执行)
-      # 目标路径明确为 //gdmp:gdmp
-      - name: Build with Bazel (On Virtual Drive)
-        shell: cmd
-        run: |
-          R:
-          echo Starting Bazel Build on Drive R:...
           bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:gdmp
 
-      # 9. 搜刮战利品
       - name: Find and Copy Artifacts
         shell: cmd
         run: |
           R:
           mkdir C:\final_output
-          
-          echo Searching for gdmp.dll...
           for /r bazel-bin %%i in (gdmp.dll) do copy "%%i" C:\final_output\
-          
-          echo Searching for gdmp.gdextension...
           for /r %%i in (gdmp.gdextension) do copy "%%i" C:\final_output\
-          
-          echo Artifacts collected:
-          dir C:\final_output\
 
-      # 10. 上传
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-build-v6
+          name: gdmp-windows-godot4-final
           path: C:\final_output\
