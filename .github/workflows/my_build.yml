@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V12 Fusion Fix
+name: Build GDMP for Windows (Godot 4) - V13 Final Fix
 
 on:
   workflow_dispatch:
@@ -17,7 +17,6 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      # 1. 虚拟盘策略 (保持，因为真的很有效)
       - name: Create Virtual Drive R
         shell: cmd
         run: |
@@ -38,14 +37,14 @@ jobs:
           R:
           pip install numpy opencv-python
 
-      # 2. 运行 setup.py 生成 API json 和基础绑定
+      # 1. 运行 setup.py (获取 extension_api.json)
       - name: Run Setup (Bindings)
         shell: cmd
         run: |
           R:
           python setup.py
 
-      # 3. 手动补发子模块“身份证” (防止 Bazel 找不到路)
+      # 2. 补发子模块 WORKSPACE (防止 Bazel 找不到路)
       - name: Create Dummy WORKSPACEs
         shell: cmd
         run: |
@@ -53,47 +52,50 @@ jobs:
           type NUL > godot-cpp\WORKSPACE
           type NUL > mediapipe\WORKSPACE
 
-      # 4. 【核弹级操作】融合 MediaPipe 官方配置
-      # 逻辑：读取 mediapipe/WORKSPACE 的所有内容，排除掉 'workspace(' 开头的行（避免命名冲突）
-      # 然后追加到我们的主 WORKSPACE 文件中。
-      # 这样，Google 定义的 100+ 个依赖瞬间全部生效。
-      - name: Fuse MediaPipe Configuration
+      # 3. 【修正后的融合操作】
+      # 这次 BaseConfig 里包含了 Hedron 的定义，不会再报 undefined 了
+      - name: Fuse Configuration (Corrected)
         shell: powershell
         run: |
           Set-Location R:\
           
-          # 1. 定义我们要保留的基础配置
+          # 这里把上次漏掉的 hedron 定义补回来了
           $BaseConfig = @"
           workspace(name = "gdmp")
           load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
           load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
+          # 必须包含这个，否则 Bazel 无法生成编译命令
+          http_archive(
+              name = "hedron_compile_commands",
+              url = "https://github.com/hedronvision/bazel-compile-commands-extractor/archive/1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93.tar.gz",
+              strip_prefix = "bazel-compile-commands-extractor-1e08f8e0507b6b6b1f4416a9a22cf5c28beaba93",
+          )
+
           local_repository(name = "godot-cpp", path = "godot-cpp")
           local_repository(name = "mediapipe", path = "mediapipe")
           "@
           
-          # 2. 写入基础配置（覆盖旧文件）
+          # 写入基础配置
           Set-Content -Path "WORKSPACE" -Value $BaseConfig
           
-          # 3. 读取 MediaPipe 的官方配置，过滤掉 'workspace(' 声明
+          # 读取 MediaPipe 官方配置，过滤掉冲突行，追加到后面
+          # 这样就能自动解决 rules_proto_grpc 等上百个依赖问题
           Write-Host "Reading MediaPipe official configuration..."
           $MediaPipeConfig = Get-Content "mediapipe\WORKSPACE" | Where-Object { $_ -notmatch '^workspace\(' }
           
-          # 4. 暴力追加到主文件
           Write-Host "Injecting MediaPipe config..."
-          Add-Content -Path "WORKSPACE" -Value "`n# === MEDIAPIPE FUSION START ==="
+          Add-Content -Path "WORKSPACE" -Value "`n# === MEDIAPIPE FUSION ==="
           Add-Content -Path "WORKSPACE" -Value $MediaPipeConfig
-          Add-Content -Path "WORKSPACE" -Value "# === MEDIAPIPE FUSION END ==="
           
-          Write-Host "Fusion Complete. WORKSPACE size:"
-          (Get-Item WORKSPACE).Length
+          Write-Host "Configuration Complete."
 
-      # 5. 编译 (GDMP 大写)
+      # 4. 编译
       - name: Build with Bazel
         shell: cmd
         run: |
           R:
-          echo Starting Compilation with Fused Config...
+          echo Starting Compilation...
           bazel build -c opt --define=GODOT=4 --copt=/D_WIN32_WINNT=0x0601 //gdmp:GDMP
 
       - name: Find and Copy Artifacts
@@ -107,5 +109,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-v12-fusion
+          name: gdmp-windows-godot4-v13-final
           path: C:\final_output\
