@@ -1,4 +1,4 @@
-name: Build GDMP for Windows (Godot 4) - V17 Encoding Fix
+name: Build GDMP for Windows (Godot 4) - V18 Precision Fix
 
 on:
   workflow_dispatch:
@@ -43,25 +43,42 @@ jobs:
           R:
           python setup.py
 
-      - name: Fix Submodules and Mock NPM
+      # 【核心修复】完善 Mock 系统
+      # 这次我们不仅建立目录，还要放入 BUILD 文件，把它们变成合法的 Bazel Package
+      - name: Construct Mock Repositories
         shell: powershell
         run: |
           Set-Location R:\
           
-          # Fix Godot-CPP
-          Write-Host "Fixing Godot-CPP..."
-          New-Item -Force "godot-cpp\WORKSPACE"
-          "cc_library(name = 'godot', visibility = ['//visibility:public'])" | Out-File "godot-cpp\BUILD" -Encoding ASCII
-
-          # Mock NPM
+          # --- 1. Mock NPM (修复 @bazel/typescript is not a package) ---
           Write-Host "Mocking NPM..."
           New-Item -ItemType Directory -Force "mock_npm/@bazel/typescript"
+          
+          # 根目录文件
           New-Item -Force "mock_npm/WORKSPACE"
           New-Item -Force "mock_npm/BUILD"
+          
+          # 关键点：在子目录里也放一个 BUILD 文件，证明它是一个 Package
+          New-Item -Force "mock_npm/@bazel/typescript/BUILD"
+          # 创建空的 index.bzl 骗过加载
           New-Item -Force "mock_npm/@bazel/typescript/index.bzl"
 
-      # 【核心修复】使用 ASCII 编码重写文件，彻底去除 BOM 头
-      - name: Rewrite WORKSPACE File (No BOM)
+          # --- 2. Mock Remote Execution (修复 TensorFlow 报错) ---
+          Write-Host "Mocking Remote Execution..."
+          New-Item -ItemType Directory -Force "mock_remote"
+          New-Item -Force "mock_remote/WORKSPACE"
+          New-Item -Force "mock_remote/BUILD"
+          # 创建空的 remote_execution.bzl
+          New-Item -Force "mock_remote/remote_execution.bzl"
+
+          # --- 3. Fix Godot-CPP ---
+          Write-Host "Fixing Godot-CPP..."
+          New-Item -Force "godot-cpp/WORKSPACE"
+          "cc_library(name = 'godot', visibility = ['//visibility:public'])" | Out-File "godot-cpp/BUILD" -Encoding ASCII
+
+      # 【核心修复】重写 WORKSPACE (ASCII 编码，无 BOM)
+      # 加入了 local_config_remote_execution 的定义
+      - name: Rewrite WORKSPACE File
         shell: powershell
         run: |
           Set-Location R:\
@@ -72,10 +89,17 @@ jobs:
           load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
           load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
+          # === Local Mocks ===
           local_repository(name = "godot-cpp", path = "godot-cpp")
           local_repository(name = "mediapipe", path = "mediapipe")
+          
+          # Mocked NPM
           local_repository(name = "npm", path = "mock_npm")
+          
+          # Mocked Remote Config for TensorFlow
+          local_repository(name = "local_config_remote_execution", path = "mock_remote")
 
+          # === External Dependencies ===
           http_archive(
               name = "bazel_skylib",
               urls = ["https://github.com/bazelbuild/bazel-skylib/releases/download/1.4.1/bazel-skylib-1.4.1.tar.gz"],
@@ -107,17 +131,18 @@ jobs:
           )
           "@
 
-          # 读取原文件，剔除旧的 workspace 定义
+          # 读取原文件，剔除旧头部
           $OriginalCleaned = Get-Content "WORKSPACE" | Where-Object { $_ -notmatch '^\s*workspace\(' }
 
           # 合并
           $FinalContent = $Header + "`n" + ($OriginalCleaned -join "`n")
           
-          # 【关键】使用 ASCII 编码保存，防止 BOM 乱码
+          # 强制 ASCII 保存
           Set-Content -Path "WORKSPACE" -Value $FinalContent -Encoding ASCII
 
           Write-Host "WORKSPACE Rebuilt successfully (ASCII)."
 
+      # 4. 编译
       - name: Build with Bazel
         shell: cmd
         run: |
@@ -136,5 +161,5 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gdmp-windows-godot4-v17-success
+          name: gdmp-windows-godot4-v18-precision
           path: C:\final_output\
